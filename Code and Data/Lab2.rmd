@@ -1,0 +1,339 @@
+---
+title: "Lab 2"
+output:
+  pdf_document: default
+  html_document: 
+    css: custom.css
+  word_document: default
+date: "2025-11-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(readr)
+library(lmtest)
+library(tidyverse)
+library(stargazer)
+library(sandwich)
+library(stringr)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+county_dat <- read_csv("county_dat_seer.csv")
+rate_dat <- read_csv("county_mort.csv")
+#census_dat1 <- read_csv("ACSDP5Y2022.DP05-Data.csv")
+#census_dat2 <- read_csv("ACSST5Y2022.S2701-Data.csv")
+
+```
+
+```{r}
+View(rate_dat)
+View(county_dat)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+#colnames(census_dat1) <- census_dat1[1,]
+#census_dat1 <- census_dat1[-1,]
+#colnames(census_dat2) <- census_dat2[1,]
+#census_dat2 <- census_dat2[-1,]
+#census_dat1$FIPS <- as.numeric(sub(".*US", "", census_dat1$Geography))
+#census_dat2$FIPS <- as.numeric(sub(".*US", "", census_dat2$Geography))
+names(county_dat)[names(county_dat) == "Unique state-counties for 2022"] <- "State_county"
+county_dat$fips1 <- sapply(str_extract_all(county_dat$State_county, "(?<=\\()[^)(]+(?=\\))"), paste0, collapse =",")
+county_dat$FIPS2 <- sapply(strsplit(county_dat$fips1, ","), `[`, 1)
+county_dat$FIPS <- as.numeric(gsub("[^0-9.]", "", county_dat$FIPS2))
+#merged_df <- Reduce(function(x, y) merge(x, y, by = "FIPS"), 
+                 #list(rate_dat, county_dat, census_dat1, census_dat2))
+merged_df <- merge(county_dat,rate_dat, by = "FIPS")
+missed_county <- anti_join(county_dat,rate_dat, by = "FIPS")
+names(merged_df)[names(merged_df) == "Median family income (in tens) ACS 2018-2022"] <- "med_inc"
+merged_df$Rate <- merged_df$`Age-Adjusted Death Rate([rate note]) - deaths per 100,000`
+merged_df <- subset(merged_df, merged_df$med_inc != "Blank(s)" & merged_df$Rate != "*")
+merged_df$Rate <- as.numeric(merged_df$Rate)
+merged_df$med_inc <- as.numeric(sub(",", "", merged_df$med_inc, fixed = TRUE))
+names(merged_df)[names(merged_df) == "% Persons age 65+ ACS 2018-2022"] <- "over_65"
+merged_df$over_65 <- as.numeric(merged_df$over_65)
+merged_df$over65perc <- merged_df$over_65/100
+merged_df$med_inc_full <- merged_df$med_inc*10
+merged_df$`% Persons below poverty ACS 2018-2022` <- as.numeric(merged_df$`% Persons below poverty ACS 2018-2022`)
+merged_df$pov_rate <- merged_df$`% Persons below poverty ACS 2018-2022`/100
+model1 <- lm(Rate ~ med_inc_full, merged_df)
+model2 <- lm(Rate ~ med_inc_full + over65perc, merged_df)
+plot(merged_df$med_inc_full, merged_df$Rate, xlab = "Median Income by County", ylab = "Cancer Mortality per 100k", main = "Cancer Mortality vs Income by US County")
+write.csv(merged_df, "Seer_full_mort.csv", row.names = FALSE)
+```
+
+```{r}
+full_merged <- read_csv("Merged_SEER_and_ACS_dataset.csv")
+# Update the table to only keep the interested variables: Age buckets, age groups, race/ethnicity, insurance status, public insurance, private insurance
+final_dat <- full_merged %>%
+  select(
+    FIPS, County_Name, State,
+    
+# Ages
+    Pct_Age_Under_5 = starts_with("DP05_0005PE"),
+    Pct_Age_5_9     = starts_with("DP05_0006PE"),
+    Pct_Age_10_14   = starts_with("DP05_0007PE"),
+    Pct_Age_15_19   = starts_with("DP05_0008PE"),
+    Pct_Age_20_24   = starts_with("DP05_0009PE"),
+    Pct_Age_25_34   = starts_with("DP05_0010PE"),
+    Pct_Age_35_44   = starts_with("DP05_0011PE"),
+    Pct_Age_45_54   = starts_with("DP05_0012PE"),
+    Pct_Age_55_59   = starts_with("DP05_0013PE"),
+    Pct_Age_60_64   = starts_with("DP05_0014PE"),
+    Pct_Age_65_74   = starts_with("DP05_0015PE"),
+    Pct_Age_75_84   = starts_with("DP05_0016PE"),
+    Pct_Age_85_Over = starts_with("DP05_0017PE"),
+    
+# Age Groups
+    Pct_Under18  = starts_with("DP05_0019PE"),
+    Pct_Over65   = starts_with("DP05_0024PE"),
+    
+# Race/Ethnicity
+Pct_Female   = starts_with("DP05_0003PE"),
+Pct_Hispanic = starts_with("DP05_0073PE"),
+Pct_White_NH = starts_with("DP05_0079PE"),
+Pct_Black_NH = starts_with("DP05_0080PE"),
+Pct_Asian_NH = starts_with("DP05_0082PE"),
+Pct_Native_NH = starts_with("DP05_0081PE"),
+Pct_Hawaiian_Other_PI_NH = starts_with("DP05_0083PE"),
+Pct_Other_NH = starts_with("DP05_0084PE"),
+Pct_Two_Races_NH = starts_with("DP05_0085PE"),
+    
+# Insurance status S2701
+    Pct_Uninsured = starts_with("S2701_C05_001E"),
+    Poverty_Count = starts_with("S2701_C01_061E"),
+    Poverty_Univ  = starts_with("S2701_C01_057E"),
+    
+# Public insurance S2704
+    Pct_Public_Ins = starts_with("S2704_C03_001E"),
+    Pct_Medicare   = starts_with("S2704_C03_002E"),
+    Pct_Medicaid   = starts_with("S2704_C03_006E"),
+    
+# Private insurance S2703
+    Pct_Private_Ins     = starts_with("S2703_C03_001E"),
+    Pct_Employer_Ins    = starts_with("S2703_C03_002E"),
+    Pct_DirectPurch_Ins = starts_with("S2703_C03_006E"),
+    
+# Mortality & Urbanity (SEER)
+    Mortality_Rate   = `Age-Adjusted Death Rate([rate note]) - deaths per 100,000`,
+    Pct_Urban        = `% Urban 2010`,
+    Rural_Urban_Code = `2023 Rural-Urban Continuum Codes([rural urban note])`
+  ) %>%
+  
+ # Convert numeric columns
+  mutate(across(-c(FIPS, County_Name, State, Rural_Urban_Code), as.numeric)) %>%
+  
+# Calculate final Poverty Percentage
+  mutate(Pct_Poverty = (Poverty_Count / Poverty_Univ) * 100) %>%
+  select(-Poverty_Count, -Poverty_Univ)
+
+```
+
+
+Stargazer plot below
+
+```{r working with data, warning=FALSE, results='asis'}
+final_dat <- read_csv("Mort_demo_insur_dataset.csv")
+
+final_dat[,20:24]
+final_dat$Most_Prev_Race <- colnames(final_dat[,20:24])[apply(final_dat[,20:24],1,which.max)]
+final_dat$Pct_Urban <- final_dat$Pct_Urban/100
+model1 <- lm(Mortality_Rate ~ Pct_Poverty, data = final_dat)
+model2 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Uninsured, data = final_dat)
+model3 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_White_NH, data = final_dat)
+model4 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Black_NH, data = final_dat)
+model5 <- lm(Mortality_Rate ~ Pct_Poverty + Rural_Urban_Code, data = final_dat)
+model6 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Over65, data = final_dat)
+model7 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Hispanic, data = final_dat)
+model8 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Private_Ins, data = final_dat)
+model9 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Employer_Ins, data = final_dat)
+model10 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid, data = final_dat)
+model11 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicare, data = final_dat)
+model12 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins, data = final_dat)
+model13 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH, data = final_dat)
+model14 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Most_Prev_Race, data = final_dat)
+model15 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_Urban, data = final_dat)
+model16 <- lm(Mortality_Rate ~ Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH, data = final_dat)
+#model17 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH +Pct_Hawaiian_Other_PI_NH + Pct_Other_NH + Pct_Two_Races_NH, data = final_dat)
+model18 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH + Pct_Two_Races_NH, data = final_dat)
+
+model18_resid <- resid(model18)
+final_dat$model_18_residuals <- resid(model18)
+final_dat$model_18_predictions <- predict(model18)
+plot_1 <- final_dat %>%  
+     ggplot(aes(x = Pct_Poverty, y = model_18_residuals)) + 
+     geom_point() + geom_smooth()
+plot_2 <- final_dat %>%  
+     ggplot(aes(x = Pct_Medicaid, y = model_18_residuals)) + 
+     geom_point() + geom_smooth()
+plot_3 <- final_dat %>%  
+     ggplot(aes(x = Pct_Private_Ins, y = model_18_residuals)) + 
+     geom_point() + geom_smooth()
+plot_4 <- final_dat %>%  
+     ggplot(aes(x = model_18_predictions, y = model_18_residuals)) + 
+     geom_point() + geom_smooth() + labs(x = "Model Predictions", y = "Model Residuals") +   
+     ggtitle("Cancer Mortality Model Residuals vs Predictions")
+model_list <- list(model1, model12, model18)
+robust_se_mod1 <- sqrt(diag(vcovHC(model1)))
+robust_se_mod12 <- sqrt(diag(vcovHC(model12)))
+robust_se_mod18    <- sqrt(diag(vcovHC(model18)))
+
+stargazer(model_list,se = list(robust_se_mod1, robust_se_mod12, robust_se_mod18), font.size = "small",
+          title = "Cancer Mortality Rate Relationship with Poverty and Health Insurance",
+          dep.var.labels = "Cancer Mortality Rate",
+          covariate.labels = c("Percentage of People in Poverty", "Percentage of People on Medicaid", "Percentage of People with Private Insurance", "Percentage of White Population", "Percentage of Black Population", "Percentage of Hispanic Population", "Percentage of Asian Population", "Percentage of Native Population", "Percentage of Two or More Races"), star.cutoffs = c(0.05, 0.01, 0.001), 
+model.numbers = TRUE,
+column.sep.width = "1pt")
+
+
+```
+```{r}
+    library(usmap)
+final_dat <- read.csv("Mort_demo_insur_dataset.csv")
+final_dat$fips = final_dat$FIPS
+   plot_usmap(data = final_dat, values = "Mortality_Rate", regions = "counties") +
+    ggplot2::scale_fill_continuous(low = "lightyellow", high = "red", name = "Cancer Mortality \n per 100k") +
+    ggplot2::labs(title = "Cancer Mortality Rate by US County")
+```
+
+```{r}
+    ggplot(final_dat, aes(x = Pct_Poverty, y = Mortality_Rate, fill = Pct_Private_Ins)) +
+    geom_point(shape = 21, size = 3) +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 50) +
+    labs(x = "Percentage of People in Poverty", y = "Cancer Mortality Rate per 100k", title = "Relationship Between Cancer Mortality, Poverty, and Health Insurance", fill = "Percentage of People \nwith Private Insurance")
+```
+
+```{r}
+#Fix final data set:
+library(tidyverse)
+library(rsample)
+library(broom)
+library(stargazer)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+library(gridExtra)
+
+#Load Data:
+raw_demo        <- read_csv("ACSDP5Y2022.DP05-Data.csv", col_names = FALSE)
+raw_ins_status  <- read_csv("ACSST5Y2022.S2701-Data.csv", col_names = FALSE)
+raw_ins_public  <- read_csv("ACSST5Y2022.S2704-Data.csv", col_names = FALSE)
+raw_ins_private <- read_csv("ACSST5Y2022.S2703-Data.csv", col_names = FALSE)
+raw_mort        <- read_csv("Seer_full_mort.csv", col_types = cols(.default = "c"))
+
+# Clear SEER FIPS and format as 5 digit
+raw_mort$FIPS <- sprintf("%05d", as.numeric(raw_mort$FIPS))
+
+#Rename county name column and extract state
+raw_mort <- raw_mort %>%
+  rename(County_Name = County) %>%
+  mutate(State = str_sub(State_county, 1, 2))
+
+# Clean up the headers for ACS data
+prepare_full <- function(df) {
+  codes <- as.character(unlist(df[1, ]))
+  descs <- as.character(unlist(df[2, ]))
+  codes[is.na(codes)] <- "UnknownCode"
+  descs[is.na(descs)] <- "UnknownDesc"
+  
+  new_headers <- paste(codes, descs, sep = " - ")
+  colnames(df) <- new_headers
+  df <- df[-c(1, 2), ]
+  
+  geo_col <- grep("GEO_ID", names(df), value = TRUE)[1]
+  df$FIPS <- str_sub(df[[geo_col]], -5)
+  return(df)
+}
+#apply function
+df_demo_full        <- prepare_full(raw_demo)
+df_ins_status_full  <- prepare_full(raw_ins_status)
+df_ins_public_full  <- prepare_full(raw_ins_public)
+df_ins_private_full <- prepare_full(raw_ins_private)
+
+
+#Merge datasets
+full_merged <- df_demo_full %>%
+  inner_join(df_ins_status_full, by = "FIPS") %>%
+  inner_join(df_ins_public_full, by = "FIPS") %>%
+  inner_join(df_ins_private_full, by = "FIPS") %>%
+  inner_join(raw_mort, by = "FIPS")
+
+write_csv(full_merged, "Merged_SEER_and_ACS_dataset.csv")
+
+# Update the table to only keep the interested variables: Age buckets, age groups, race/ethnicity, insurance status, public insurance, private insurance
+mort_demo_insur <- full_merged %>%
+  select(
+    FIPS, County_Name, State,
+    
+# Ages
+    Pct_Age_Under_5 = starts_with("DP05_0005PE"),
+    Pct_Age_5_9     = starts_with("DP05_0006PE"),
+    Pct_Age_10_14   = starts_with("DP05_0007PE"),
+    Pct_Age_15_19   = starts_with("DP05_0008PE"),
+    Pct_Age_20_24   = starts_with("DP05_0009PE"),
+    Pct_Age_25_34   = starts_with("DP05_0010PE"),
+    Pct_Age_35_44   = starts_with("DP05_0011PE"),
+    Pct_Age_45_54   = starts_with("DP05_0012PE"),
+    Pct_Age_55_59   = starts_with("DP05_0013PE"),
+    Pct_Age_60_64   = starts_with("DP05_0014PE"),
+    Pct_Age_65_74   = starts_with("DP05_0015PE"),
+    Pct_Age_75_84   = starts_with("DP05_0016PE"),
+    Pct_Age_85_Over = starts_with("DP05_0017PE"),
+    
+# Age Groups
+    Pct_Under18  = starts_with("DP05_0019PE"),
+    Pct_Over65   = starts_with("DP05_0024PE"),
+    
+# Race/Ethnicity
+    Pct_Female   = starts_with("DP05_0003PE"),
+    Pct_Hispanic = starts_with("DP05_0073PE"),
+    Pct_White_NH = starts_with("DP05_0079PE"),
+    Pct_Black_NH = starts_with("DP05_0080PE"),
+    Pct_Asian_NH = starts_with("DP05_0082PE"),
+    Pct_Native_NH = starts_with("DP05_0081PE"),
+    Pct_Two_Races_NH = starts_with("DP05_0085PE"),
+# Insurance status S2701
+    Pct_Uninsured = starts_with("S2701_C05_001E"),
+    Poverty_Count = starts_with("S2701_C01_061E"),
+    Poverty_Univ  = starts_with("S2701_C01_057E"),
+    
+# Public insurance S2704
+    Pct_Public_Ins = starts_with("S2704_C03_001E"),
+    Pct_Medicare   = starts_with("S2704_C03_002E"),
+    Pct_Medicaid   = starts_with("S2704_C03_006E"),
+    
+# Private insurance S2703
+    Pct_Private_Ins     = starts_with("S2703_C03_001E"),
+    Pct_Employer_Ins    = starts_with("S2703_C03_002E"),
+    Pct_DirectPurch_Ins = starts_with("S2703_C03_006E"),
+    
+# Mortality & Urbanity (SEER)
+    Mortality_Rate   = `Age-Adjusted Death Rate([rate note]) - deaths per 100,000`,
+    Pct_Urban        = `% Urban 2010`,
+    Rural_Urban_Code = `2023 Rural-Urban Continuum Codes([rural urban note])`
+  ) %>%
+  
+ # Convert numeric columns
+  mutate(across(-c(FIPS, County_Name, State, Rural_Urban_Code), as.numeric)) %>%
+  
+# Calculate final Poverty Percentage
+  mutate(Pct_Poverty = (Poverty_Count / Poverty_Univ) * 100) %>%
+  select(-Poverty_Count, -Poverty_Univ)
+
+# Export
+write_csv(mort_demo_insur, "Mort_demo_insur_dataset.csv")
+
+```
+
