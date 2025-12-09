@@ -147,10 +147,6 @@ write_csv(mort_demo_insur, "Mort_demo_insur_dataset.csv")
 
 
 ```
-# Abstract
-
-Understanding how poverty, insurance coverage, and racial composition influence age-adjusted cancer mortality remains a critical public health concern in the United States. Using descriptive statistics and regression models at the county level, our results find a significant positive association between poverty and cancer mortality. While accounting for the insurance coverage variables reduces the strength of their association, the relationship still remains significant. Medicaid coverage corresponds to higher mortality, while private insurance correlates with lower mortality. Racial composition, especially higher proportions of multiracial populations continues to predict mortality even after controls. These findings highlight persistent structural inequities and underscore the need for targeted public health investment and more equitable resource allocation.
-
 # Introduction
 The relationship of socioeconomic status to accessibility in healthcare has arguably been a controversial topic within the United States^[Kim, Y., Vazquez, C. & Cubbin, C. Socioeconomic disparities in health outcomes in the United States in the late 2010s: results from four national population-based studies. Arch Public Health 81, 15 (2023)]. In particular, the disparity in accessing healthcare has largely affected millions of Americans, leading to unequal quality of care, waiting times, unresolved health issues, and survival rates^[Ohlson, Madeline (2020) "Effects of Socioeconomic Status and Race on Access to Healthcare in the United States," Perspectives: Vol. 12, Article 2.]. Understanding the link between poverty and cancer is important as it can help uncover patterns of limited access to healthcare, environmental exposure, and an absence of preventive services that disproportionately affect low-income populations. In addition, poverty levels also have some association with the ability to access healthcare insofar as insurance options are concerned and disproportionately affects certain racial groups within the United States. It is important to reveal these potential disparities in health outcomes among marginalized communities.
 
@@ -180,7 +176,34 @@ knitr::include_graphics("Seer_Age_Adj_Calc.png")
 **Insurance Composition**: Percent uninsured, percent covered by Medicaid or public assistance, and percent covered by private insurance.\newline
 **Demographic Controls**: To isolate the effect of poverty, we controlled for racial and ethnic composition using Non-Hispanic categories to prevent double-counting. Variables included the percentage of the population identifying as White (Non-Hispanic), Black (Non-Hispanic), Asian (Non-Hispanic), Native American (Non-Hispanic), and Hispanic (of any race).
 Note: Raw age variables were excluded from regression models as the dependent variable is already age-adjusted.
-\newline
+
+# Result and Modeling
+```{r Stargazer Table, results='asis', include = TRUE}
+df <- read_csv("Mort_demo_insur_dataset.csv")
+model1 <- lm(Mortality_Rate ~ Pct_Poverty, data = df)
+model2 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins, data = df)
+model3 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH + Pct_Two_Races_NH, data = df)
+model_list <- list(model1, model2, model3)
+robust_se_mod1 <- sqrt(diag(vcovHC(model1)))
+robust_se_mod2 <- sqrt(diag(vcovHC(model2)))
+robust_se_mod3    <- sqrt(diag(vcovHC(model3)))
+stargazer(model_list,se = list(robust_se_mod1, robust_se_mod2, robust_se_mod3), 
+          font.size = "small",
+          title = "Cancer Mortality Rate Relationship with Poverty, Health Insurance, and Race",
+          dep.var.labels = "Cancer Mortality Rate",
+          covariate.labels = c("Percentage of People in Poverty", "Percentage of People on   Medicaid", "Percentage of People with Private Insurance", "Percentage of White Population", "Percentage of Black Population", "Percentage of Hispanic Population", "Percentage of Asian Population", "Percentage of Native Population", "Percentage of Two or More Races"), 
+          star.cutoffs = c(0.05, 0.01, 0.001), 
+model.numbers = TRUE,
+column.sep.width = "0.9pt",
+no.space = TRUE,
+table.placement = "H",
+header = FALSE)
+
+```
+**Model 1** - Poverty and Mortality: The simplest form of the model, comparing just the percentage of people in poverty with the cancer mortality rate, demonstrates a significant relationship between poverty and cancer mortality rate. Both the coefficient and intercept values are significant with p values below 0.001, meaning we can reject the null hypothesis that the independent variable does not have a relationship with the dependent variable and the null hypothesis that the intercept is not different from a value of 0. From a practical perspective, this means that for each ten percent increase in the number of people living in poverty within a county, the age-adjusted cancer mortality rate increases by approximately 21 deaths per 100,000 people. \newline
+**Model 2** - Role of Insurance: As we expand our model to incorporate the type of insurance, we see that the coefficient for the percentage of people in poverty roughly halves but still remains significant. While the coefficients relating to insurance type also have significance, suggesting they have a relationship with cancer mortality when county poverty levels are accounted for. Practically speaking, the insurance status coefficients suggest that if the percentage of people on Medicaid within the county were to be ten percent higher, then roughly six more people per 100,000 would die due to cancer compared to a county that experiences similar levels of poverty. Conversely, a county with ten percent more people on private insurance would expect roughly three fewer cancer deaths per 100,000 people. \newline
+**Model 3**: Demographic factors: In the context of insurance and poverty, the ethnic composition of the county appears to have some relationship with cancer mortality outcomes. After controlling for economic factors, racial composition remains a significant predictor. It appears that counties with higher populations of people comprising two or more races have worse outcomes insofar as cancer mortality is concerned, with statistical significance. While it may be difficult to discern precise practical meaning from the racial coefficients, we thought it was still important to include this model since it has implications for what communities may be able to benefit the most from policies hoping to provide more equity in healthcare to ameliorate cancer outcomes. This finding highlights specific communities that would benefit most from targeted health equity policies.
+
 
 ```{r Scatterplot, warning = FALSE, fig.width = 6.5, fig.height = 4}
 #Explore relationship
@@ -268,36 +291,6 @@ ggplot(
   )
 
 ```
-
-# Result and Modeling
-```{r Stargazer Table, results='asis', include = TRUE}
-df <- read_csv("Mort_demo_insur_dataset.csv")
-model1 <- lm(Mortality_Rate ~ Pct_Poverty, data = df)
-model2 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins, data = df)
-model3 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH + Pct_Two_Races_NH, data = df)
-model_list <- list(model1, model2, model3)
-robust_se_mod1 <- sqrt(diag(vcovHC(model1)))
-robust_se_mod2 <- sqrt(diag(vcovHC(model2)))
-robust_se_mod3    <- sqrt(diag(vcovHC(model3)))
-stargazer(model_list,se = list(robust_se_mod1, robust_se_mod2, robust_se_mod3), 
-          font.size = "small",
-          title = "Cancer Mortality Rate Relationship with Poverty, Health Insurance, and Race",
-          dep.var.labels = "Cancer Mortality Rate",
-          covariate.labels = c("Percentage of People in Poverty", "Percentage of People on   Medicaid", "Percentage of People with Private Insurance", "Percentage of White Population", "Percentage of Black Population", "Percentage of Hispanic Population", "Percentage of Asian Population", "Percentage of Native Population", "Percentage of Two or More Races"), 
-          star.cutoffs = c(0.05, 0.01, 0.001), 
-model.numbers = TRUE,
-column.sep.width = "0.9pt",
-no.space = TRUE,
-table.placement = "H",
-header = FALSE)
-
-```
-**Model 1** - Poverty and Mortality: The simplest form of the model, comparing just the percentage of people in poverty with the cancer mortality rate, demonstrates a significant relationship between poverty and cancer mortality rate. Both the coefficient and intercept values are significant with p values below 0.001, meaning we can reject the null hypothesis that the independent variable does not have a relationship with the dependent variable and the null hypothesis that the intercept is not different from a value of 0. From a practical perspective, this means that for each ten percent increase in the number of people living in poverty within a county, the age-adjusted cancer mortality rate increases by approximately 21 deaths per 100,000 people. \newline
-**Model 2** - Role of Insurance: As we expand our model to incorporate the type of insurance, we see that the coefficient for the percentage of people in poverty roughly halves but still remains significant. While the coefficients relating to insurance type also have significance, suggesting they have a relationship with cancer mortality when county poverty levels are accounted for. Practically speaking, the insurance status coefficients suggest that if the percentage of people on Medicaid within the county were to be ten percent higher, then roughly six more people per 100,000 would die due to cancer compared to a county that experiences similar levels of poverty. Conversely, a county with ten percent more people on private insurance would expect roughly three fewer cancer deaths per 100,000 people. \newline
-**Model 3**: Demographic factors: In the context of insurance and poverty, the ethnic composition of the county appears to have some relationship with cancer mortality outcomes. After controlling for economic factors, racial composition remains a significant predictor. It appears that counties with higher populations of people comprising two or more races have worse outcomes insofar as cancer mortality is concerned, with statistical significance. While it may be difficult to discern precise practical meaning from the racial coefficients, we thought it was still important to include this model since it has implications for what communities may be able to benefit the most from policies hoping to provide more equity in healthcare to ameliorate cancer outcomes. This finding highlights specific communities that would benefit most from targeted health equity policies.
-
-
-
 
 
 
