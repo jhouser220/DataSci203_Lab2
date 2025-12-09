@@ -1,0 +1,379 @@
+---
+title: "Poverty Level Relationship with Cancer Mortality in U.S. Counties"
+author:
+  Minh Doan, Elle Luo, Vamsi Katari, Jeff Houser
+date: "2025-12-09"
+output:
+  pdf_document:
+    fig_caption: yes
+indent: true
+keep_tex: yes
+header-includes: \usepackage{float}
+
+---
+\newpage
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, results = "hide", message = FALSE)
+library(tidyverse)
+library(rsample)
+library(broom)
+library(stargazer)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+library(gridExtra)
+library(lmtest)
+library(sandwich)
+library(stringr)
+
+```
+
+
+
+```{r Load Data}
+raw_demo        <- read_csv("ACSDP5Y2022.DP05-Data.csv", col_names = FALSE)
+raw_ins_status  <- read_csv("ACSST5Y2022.S2701-Data.csv", col_names = FALSE)
+raw_ins_public  <- read_csv("ACSST5Y2022.S2704-Data.csv", col_names = FALSE)
+raw_ins_private <- read_csv("ACSST5Y2022.S2703-Data.csv", col_names = FALSE)
+raw_mort        <- read_csv("Seer_full_mort.csv", col_types = cols(.default = "c"))
+
+```
+
+
+```{r Data Wrangling}
+# Clear SEER FIPS and format as 5 digit
+raw_mort$FIPS <- sprintf("%05d", as.numeric(raw_mort$FIPS))
+
+#Rename county name column and extract state
+raw_mort <- raw_mort %>%
+  rename(County_Name = County) %>%
+  mutate(State = str_sub(State_county, 1, 2))
+
+# Clean up the headers for ACS data
+prepare_full <- function(df) {
+  codes <- as.character(unlist(df[1, ]))
+  descs <- as.character(unlist(df[2, ]))
+  codes[is.na(codes)] <- "UnknownCode"
+  descs[is.na(descs)] <- "UnknownDesc"
+  
+  new_headers <- paste(codes, descs, sep = " - ")
+  colnames(df) <- new_headers
+  df <- df[-c(1, 2), ]
+  
+  geo_col <- grep("GEO_ID", names(df), value = TRUE)[1]
+  df$FIPS <- str_sub(df[[geo_col]], -5)
+  return(df)
+}
+#apply function
+df_demo_full        <- prepare_full(raw_demo)
+df_ins_status_full  <- prepare_full(raw_ins_status)
+df_ins_public_full  <- prepare_full(raw_ins_public)
+df_ins_private_full <- prepare_full(raw_ins_private)
+
+
+#Merge datasets
+full_merged <- df_demo_full %>%
+  inner_join(df_ins_status_full, by = "FIPS") %>%
+  inner_join(df_ins_public_full, by = "FIPS") %>%
+  inner_join(df_ins_private_full, by = "FIPS") %>%
+  inner_join(raw_mort, by = "FIPS")
+
+write_csv(full_merged, "Merged_SEER_and_ACS_dataset.csv")
+
+# Update the table to only keep the interested variables: Age buckets, age groups, race/ethnicity, insurance status, public insurance, private insurance
+mort_demo_insur <- full_merged %>%
+  select(
+    FIPS, County_Name, State,
+    
+# Ages
+    Pct_Age_Under_5 = starts_with("DP05_0005PE"),
+    Pct_Age_5_9     = starts_with("DP05_0006PE"),
+    Pct_Age_10_14   = starts_with("DP05_0007PE"),
+    Pct_Age_15_19   = starts_with("DP05_0008PE"),
+    Pct_Age_20_24   = starts_with("DP05_0009PE"),
+    Pct_Age_25_34   = starts_with("DP05_0010PE"),
+    Pct_Age_35_44   = starts_with("DP05_0011PE"),
+    Pct_Age_45_54   = starts_with("DP05_0012PE"),
+    Pct_Age_55_59   = starts_with("DP05_0013PE"),
+    Pct_Age_60_64   = starts_with("DP05_0014PE"),
+    Pct_Age_65_74   = starts_with("DP05_0015PE"),
+    Pct_Age_75_84   = starts_with("DP05_0016PE"),
+    Pct_Age_85_Over = starts_with("DP05_0017PE"),
+    
+# Age Groups
+    Pct_Under18  = starts_with("DP05_0019PE"),
+    Pct_Over65   = starts_with("DP05_0024PE"),
+    
+# Race/Ethnicity
+    Pct_Female   = starts_with("DP05_0003PE"),
+    Pct_Hispanic = starts_with("DP05_0073PE"),
+    Pct_White_NH = starts_with("DP05_0079PE"),
+    Pct_Black_NH = starts_with("DP05_0080PE"),
+    Pct_Asian_NH = starts_with("DP05_0082PE"),
+    Pct_Native_NH = starts_with("DP05_0081PE"),
+    Pct_Two_Races_NH = starts_with("DP05_0085PE"),
+# Insurance status S2701
+    Pct_Uninsured = starts_with("S2701_C05_001E"),
+    Poverty_Count = starts_with("S2701_C01_061E"),
+    Poverty_Univ  = starts_with("S2701_C01_057E"),
+    
+# Public insurance S2704
+    Pct_Public_Ins = starts_with("S2704_C03_001E"),
+    Pct_Medicare   = starts_with("S2704_C03_002E"),
+    Pct_Medicaid   = starts_with("S2704_C03_006E"),
+    
+# Private insurance S2703
+    Pct_Private_Ins     = starts_with("S2703_C03_001E"),
+    Pct_Employer_Ins    = starts_with("S2703_C03_002E"),
+    Pct_DirectPurch_Ins = starts_with("S2703_C03_006E"),
+    
+# Mortality & Urbanity (SEER)
+    Mortality_Rate   = `Age-Adjusted Death Rate([rate note]) - deaths per 100,000`,
+    Pct_Urban        = `% Urban 2010`,
+    Rural_Urban_Code = `2023 Rural-Urban Continuum Codes([rural urban note])`
+  ) %>%
+  
+ # Convert numeric columns
+  mutate(across(-c(FIPS, County_Name, State, Rural_Urban_Code), as.numeric)) %>%
+  
+# Calculate final Poverty Percentage
+  mutate(Pct_Poverty = (Poverty_Count / Poverty_Univ) * 100) %>%
+  select(-Poverty_Count, -Poverty_Univ)
+
+# Export
+write_csv(mort_demo_insur, "Mort_demo_insur_dataset.csv")
+
+
+
+
+```
+# Abstract
+
+Understanding how poverty, insurance coverage, and racial composition influence age-adjusted cancer mortality remains a critical public health concern in the United States. Using descriptive statistics and regression models at the county level, our results find a significant positive association between poverty and cancer mortality. While accounting for the insurance coverage variables reduces the strength of their association, the relationship still remains significant. Medicaid coverage corresponds to higher mortality, while private insurance correlates with lower mortality. Racial composition, especially higher proportions of multiracial populations continues to predict mortality even after controls. These findings highlight persistent structural inequities and underscore the need for targeted public health investment and more equitable resource allocation.
+
+# Introduction
+The relationship of socioeconomic status to accessibility in healthcare has arguably been a controversial topic within the United States^[Kim, Y., Vazquez, C. & Cubbin, C. Socioeconomic disparities in health outcomes in the United States in the late 2010s: results from four national population-based studies. Arch Public Health 81, 15 (2023)]. In particular, the disparity in accessing healthcare has largely affected millions of Americans, leading to unequal quality of care, waiting times, unresolved health issues, and survival rates^[Ohlson, Madeline (2020) "Effects of Socioeconomic Status and Race on Access to Healthcare in the United States," Perspectives: Vol. 12, Article 2.]. Understanding the link between poverty and cancer is important as it can help uncover patterns of limited access to healthcare, environmental exposure, and an absence of preventive services that disproportionately affect low-income populations. In addition, poverty levels also have some association with the ability to access healthcare insofar as insurance options are concerned and disproportionately affects certain racial groups within the United States. It is important to reveal these potential disparities in health outcomes among marginalized communities.
+
+Therefore, the research questions guiding this study are: 
+
+* _What is the descriptive relationship between county-level poverty rates and cancer mortality?_
+* _How does the strength of this relationship change when conditioning on health insurance coverage and racial composition?_
+* _What is the relationship between the racial and ethnic composition of the counties and the cancer mortality rate? Is there a specific racial or ethnic group that has a higher or lower cancer mortality rate?_
+
+The goal of our study is to help public health officials and policymakers better understand how  poverty and inequality in healthcare contribute to disparity in cancer outcomes. By providing insight into the magnitude of this disparity, our findings can further guide more resource allocation, support  early detection initiatives, and identify counties most likely to benefit from equitable health policy intervention and strategies. 
+
+# Data Source & Provenance
+To ensure high quality and reliability, we gathered data from two primary government sources: the Surveillance, Epidemiology, and End Results (SEER) program and the U.S. Census Bureau.\newline
+**Cancer Mortality (Dependent Variable)**: Cancer mortality data were sourced from the National Center for Health Statistics (NCHS) and accessed through SEER*Stat. NCHS compiles death certificate data from state vital statistics offices, with causes of death coded under ICD standards. These records undergo national cross-checks to reconcile discrepancies, remove duplicates, and validate cause-of-death classifications, followed by automated consistency edits to ensure accuracy and comparability across states. Counties with fewer than ten cancer deaths are suppressed to maintain confidentiality and statistical stability. For all available counties, we used age-adjusted mortality rates, which standardize for differences in age structure so that observed variation reflects underlying health disparities rather than demographic composition. The rate is calculated using the formula below:
+
+```{r, include = TRUE, out.width = '70%', results='asis'}
+knitr::include_graphics("Seer_Age_Adj_Calc.png")
+```
+
+
+**Socioeconomic and Demographic Data (Independent Variables)**:  All independent variables were sourced from the American Community Survey (ACS) 5-Year Estimates (2018–2022). The ACS collects data continuously using mailed questionnaires, phone interviews, and in-person enumeration, then aggregates five years of responses to produce stable county-level estimates. The Census Bureau conducts multi-stage quality checks, including nonresponse adjustment, imputation for missing items, sampling error estimation, and comparison against administrative benchmarks from agencies such as the Social Security Administration and IRS, where applicable. We selected the 5-year aggregate to ensure statistically stable estimates for small, rural counties that often have high margins of error in single-year datasets. 
+
+# Variables
+**Y-Concept: Cancer Mortality**: The dependent variable is the Age-Adjusted Cancer Mortality Rate, operationalized as the number of cancer deaths per 100,000 population, standardized to the 2000 U.S. population. \newline
+**X-Concept: Poverty**: The primary independent variable is the Poverty Rate, operationalized as the percentage of the population living below the federal poverty line. This is calculated by dividing the count of individuals below the poverty threshold by the total population for whom poverty status is determined (sourced from ACS Table S2701). \newline
+**Other Key Variables** \newline
+**Insurance Composition**: Percent uninsured, percent covered by Medicaid or public assistance, and percent covered by private insurance.\newline
+**Demographic Controls**: To isolate the effect of poverty, we controlled for racial and ethnic composition using Non-Hispanic categories to prevent double-counting. Variables included the percentage of the population identifying as White (Non-Hispanic), Black (Non-Hispanic), Asian (Non-Hispanic), Native American (Non-Hispanic), and Hispanic (of any race).
+Note: Raw age variables were excluded from regression models as the dependent variable is already age-adjusted.
+\newline
+
+```{r Scatterplot, warning = FALSE, fig.width = 6.5, fig.height = 4}
+#Explore relationship
+df_modeling <- full_merged %>%
+  select(
+    FIPS, County_Name, State,
+    
+    Mortality_Rate = `Age-Adjusted Death Rate([rate note]) - deaths per 100,000`,
+    
+    # Select raw poverty columns first
+    Poverty_Count = starts_with("S2701_C01_061E"),
+    Poverty_Univ  = starts_with("S2701_C01_057E"),
+    
+    Pct_Under18   = starts_with("DP05_0019PE"),
+    Pct_Over65    = starts_with("DP05_0024PE"),
+    Pct_Urban     = `% Urban 2010`,
+    
+    Pct_Black_NH  = starts_with("DP05_0080PE"),
+    Pct_Hispanic  = starts_with("DP05_0073PE"),
+    Pct_Asian_NH  = starts_with("DP05_0082PE"),
+    Pct_Native_NH = starts_with("DP05_0081PE"),
+    
+    Pct_Uninsured   = starts_with("S2701_C05_001E"),
+    Pct_Medicaid    = starts_with("S2704_C03_006E"),
+    Pct_Private_Ins = starts_with("S2703_C03_001E")
+  ) %>%
+  
+  mutate(across(-c(FIPS, County_Name, State), as.numeric)) %>%
+  
+  mutate(
+    Pct_Poverty = (Poverty_Count / Poverty_Univ) * 100
+  ) %>%
+  
+  select(-Poverty_Count, -Poverty_Univ) %>%
+  drop_na()
+
+#poverty rate and race
+df_modeling %>%
+  select(Pct_Poverty, Pct_Hispanic, Pct_Black_NH, Pct_Asian_NH, Pct_Native_NH) %>%
+  cor(use = "complete.obs")
+
+# Plot Mortality rate vs. poverty and private insurance
+# Private insurance groups
+private_insur_groups <- quantile(df_modeling$Pct_Private_Ins, probs = seq(0, 1, length.out = 4), na.rm = TRUE)
+# Create Custom Labels
+custom_labels <- c(
+  paste0("Low (< ", round(private_insur_groups[2], 1), "%)"),
+  paste0("Medium (", round(private_insur_groups[2], 1), " – ", round(private_insur_groups[3], 1), "%)"),
+  paste0("High (> ", round(private_insur_groups[3], 1), "%)")
+)
+
+# Create the Group Column
+df_plot_groups <- df_modeling %>%
+  mutate(Private_Ins_Group = cut(Pct_Private_Ins,
+                                 breaks = private_insur_groups, 
+                                 labels = custom_labels, 
+                                 include.lowest = TRUE))
+
+#Plot
+ggplot(
+  df_plot_groups,
+  aes(x = Pct_Poverty, y = Mortality_Rate,
+      color = Private_Ins_Group, fill = Private_Ins_Group)
+) +
+  geom_point(alpha = 0.25, size = 1.2) +
+  geom_smooth(method = "lm", se = TRUE, size = 1.1) +
+  scale_color_manual(values = c("firebrick3", "purple3", "dodgerblue4")) +
+  scale_fill_manual(values = c("firebrick3", "purple3", "dodgerblue4")) +
+  scale_x_continuous(expand = expansion(mult = c(0.02, 0.02))) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
+  labs(
+    title = "County-Level Patterns in Poverty, Insurance Coverage, \nand Cancer Mortality",
+    x = "Poverty Rate (%)",
+    y = "Age-Adjusted Cancer Mortality Rate (per 100k)",
+    color = "Private Insurance Range",
+    fill  = "Private Insurance Range"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 11, color = "gray35"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+# Result and Modeling
+```{r Stargazer Table, results='asis', include = TRUE}
+df <- read_csv("Mort_demo_insur_dataset.csv")
+model1 <- lm(Mortality_Rate ~ Pct_Poverty, data = df)
+model2 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins, data = df)
+model3 <- lm(Mortality_Rate ~ Pct_Poverty + Pct_Medicaid + Pct_Private_Ins + Pct_White_NH + Pct_Black_NH+ Pct_Hispanic+ Pct_Asian_NH + Pct_Native_NH + Pct_Two_Races_NH, data = df)
+model_list <- list(model1, model2, model3)
+robust_se_mod1 <- sqrt(diag(vcovHC(model1)))
+robust_se_mod2 <- sqrt(diag(vcovHC(model2)))
+robust_se_mod3    <- sqrt(diag(vcovHC(model3)))
+stargazer(model_list,se = list(robust_se_mod1, robust_se_mod2, robust_se_mod3), 
+          font.size = "small",
+          title = "Cancer Mortality Rate Relationship with Poverty, Health Insurance, and Race",
+          dep.var.labels = "Cancer Mortality Rate",
+          covariate.labels = c("Percentage of People in Poverty", "Percentage of People on   Medicaid", "Percentage of People with Private Insurance", "Percentage of White Population", "Percentage of Black Population", "Percentage of Hispanic Population", "Percentage of Asian Population", "Percentage of Native Population", "Percentage of Two or More Races"), 
+          star.cutoffs = c(0.05, 0.01, 0.001), 
+model.numbers = TRUE,
+column.sep.width = "0.9pt",
+no.space = TRUE,
+table.placement = "H",
+header = FALSE)
+
+```
+**Model 1** - Poverty and Mortality: The simplest form of the model, comparing just the percentage of people in poverty with the cancer mortality rate, demonstrates a significant relationship between poverty and cancer mortality rate. Both the coefficient and intercept values are significant with p values below 0.001, meaning we can reject the null hypothesis that the independent variable does not have a relationship with the dependent variable and the null hypothesis that the intercept is not different from a value of 0. From a practical perspective, this means that for each ten percent increase in the number of people living in poverty within a county, the age-adjusted cancer mortality rate increases by approximately 21 deaths per 100,000 people. \newline
+**Model 2** - Role of Insurance: As we expand our model to incorporate the type of insurance, we see that the coefficient for the percentage of people in poverty roughly halves but still remains significant. While the coefficients relating to insurance type also have significance, suggesting they have a relationship with cancer mortality when county poverty levels are accounted for. Practically speaking, the insurance status coefficients suggest that if the percentage of people on Medicaid within the county were to be ten percent higher, then roughly six more people per 100,000 would die due to cancer compared to a county that experiences similar levels of poverty. Conversely, a county with ten percent more people on private insurance would expect roughly three fewer cancer deaths per 100,000 people. \newline
+**Model 3**: Demographic factors: In the context of insurance and poverty, the ethnic composition of the county appears to have some relationship with cancer mortality outcomes. After controlling for economic factors, racial composition remains a significant predictor. It appears that counties with higher populations of people comprising two or more races have worse outcomes insofar as cancer mortality is concerned, with statistical significance. While it may be difficult to discern precise practical meaning from the racial coefficients, we thought it was still important to include this model since it has implications for what communities may be able to benefit the most from policies hoping to provide more equity in healthcare to ameliorate cancer outcomes. This finding highlights specific communities that would benefit most from targeted health equity policies.
+
+
+
+
+
+
+# Model Assumptions and Diagnostics
+Given our sample size of approximately 3,000 U.S. counties, we rely on large-sample statistical theory to evaluate our model. This approach requires us to assess two primary conditions: (1) that the data are Independent and Identically Distributed (IID), and (2) that a Best Linear Predictor (BLP) exists and is unique.
+
+**IID**: This assumption requires that each data point is independent of the others and drawn from the same underlying distribution.
+
+* Independence: Since our data represents counties, cancer mortality rates in one county are likely related to rates in neighboring counties due to shared environmental factors, regional diets, or state-level healthcare policies, suggesting a potential for violation of independence due to this geographical clustering. 
+* Identically Distributed: The assumption that all counties come from an "identical" distribution is also likely violated. Counties vary drastically in population size (e.g., Los Angeles County vs. a rural county in North Dakota). This variation suggests heteroskedasticity, meaning the variability of cancer rates is likely higher in smaller counties than in larger ones.
+* The consequences: While these violations do not prevent us from estimating the relationship (our coefficients remain consistent), they do affect how we calculate uncertainty. Specifically, clustering and heteroskedasticity likely cause our standard errors to be underestimated, meaning our results may appear more precise than they actually are.
+
+**Existence and Uniqueness of the Estimator**: This assumption ensures that a linear relationship can theoretically be calculated from the data
+
+* Existence: To establish that the best linear predictor (BLP) exists requires finite covariance between our different X variables with one another and also with our Y variable. All of the X variables are percentages and are thus finite. They also do not exhibit heavy tails, suggesting finite covariance between the different variables. Our Y variable of cancer mortality rate also does not exhibit a heavy tail and conceptually represents a finite value and would have finite covariance with the different X variables. These taken together suggest the BLP exists. 
+* Uniqueness: To evaluate that this BLP is unique requires that there not be perfect collinearity between the different X variables. While our racial composition variables are naturally related (as the percentage of one group rises, others must fall), they are distinct enough to allow us to isolate the specific relationship of each variable. No variables were automatically dropped by our software, confirming that the model is mathematically unique. 
+* Assessing the Shape: To confirm that a linear model effectively describes the actual pattern in the data, we examined the Residuals vs. Fitted plot (Appendix A3). The plot shows the trend line (blue) tracking the zero line closely, without a distinct "U" shape or curve. This suggests that a straight-line relationship is an appropriate description of the data
+
+# Conclusion
+
+This study examined how poverty, insurance coverage, and racial or ethnic composition are related to county level cancer mortality in the U.S. Across all models, socioeconomic disadvantage consistently predicts higher age adjusted mortality. A 10 point increase in poverty is associated with roughly 21 additional deaths per 100,000 people. Adding insurance variables weakens but does not remove the link between poverty and mortality, and differences in Medicaid, private insurance, and uninsured rates meaningfully shape outcomes. In the full model, racial composition, including the size of multiracial populations, remains associated with higher mortality even after accounting for poverty and insurance.
+
+These patterns highlight persistent structural inequalities: counties with high poverty, limited private insurance access, and larger marginalized populations face disproportionate cancer burdens. The findings support targeted public health investments in prevention, early detection, treatment access, Medicaid expansion, equitable reimbursement, and improved resources for rural and minority serving facilities.
+
+Several limitations should be noted: observational data prevent causal inference; neighboring counties may share unmeasured characteristics; ACS and SEER data may mask localized disparities; and broad racial categories cannot fully capture historical and social inequities. Future work could use multilevel, spatial, or longitudinal approaches to address these issues.
+Overall, this study clarifies how poverty, insurance coverage, and demographic composition jointly shape cancer mortality and offers evidence to guide more equitable health policy interventions.
+
+
+
+\newpage
+# Appendix
+## A1. Link to Data Source
+Github link to datasets:
+
+https://github.com/jhouser220/DataSci203_Lab2/tree/main/Code%20and%20Data \newline
+Census data derived from:
+
+https://data.census.gov \newline
+SEER data derived using custom software from:
+
+https://seer.cancer.gov/
+
+
+## A2. List of Model Specifications Tried (A brief list with 1-sentence takeaways, as required)
+
+1. Extreme cases-county level: 
+Variables: poverty rate, Medicaid share, private insurance share, and cancer mortality.
+Takeaway: Even among the poorest and wealthiest counties, the direction of insurance-mortality relationships remains consistent with the main model.
+
+2. Extreme cases-state level: 
+Variables: state-level poverty rate, Medicaid share, private insurance share, and cancer mortality.
+Takeaway: The insurance–mortality relationship persists when the analysis is aggregated to states, indicating the pattern is not driven solely by county-level variation.
+
+3. Mortality rate and race:
+Variables: racial composition shares, cancer mortality.
+Takeaway: Higher Black and Native American population shares correlate with higher mortality, while higher Hispanic and Asian shares correlate with lower mortality
+
+4. Mortality rate, Urban and Poverty:
+Variables: urban classification, poverty rate, cancer mortality.
+Takeaway: Urban counties show modestly lower mortality, and this advantage remains after controlling for poverty.
+
+5. Morality rate, age:
+Variables: Pct_over_65, cancer mortality
+Takeaway: Age has a known association with worse outcomes in cancer. We wanted to confirm that the age-correction of the data would show an absence of a relationship and it did.
+
+
+## A3. Residuals-vs-Fitted-Values Plot
+
+```{r Residuals Plot, include=TRUE, fig.width = 5, fig.height = 3}
+#Plot for residuals and predictions
+df$model_3_residuals <- resid(model3)
+df$model_3_predictions <- predict(model3)
+plot_res <- df %>%  
+     ggplot(aes(x = model_3_predictions, y = model_3_residuals)) + 
+     geom_point() + geom_smooth() + labs(x = "Model Predictions", y = "Model Residuals") +   
+     ggtitle("Cancer Mortality Model Residuals vs Predictions")
+plot_res
+```
+
